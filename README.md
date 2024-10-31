@@ -15,8 +15,10 @@ cp .env.example.test .env
 ## Environment Configuration
 
 ```env
+
+
 # Database Configuration
-DB_HOST=localhost
+DB_HOST=postgres
 DB_PORT=5432
 DB_USERNAME=panteon
 DB_PASSWORD=panteon
@@ -24,13 +26,13 @@ DB_NAME=panteon
 DB_DATABASE=panteon
 
 # Redis Configuration
-REDIS_HOST=localhost
+REDIS_HOST=redis
 REDIS_PORT=6379
 REDIS_PASSWORD=panteon
 
 # Docker Postgres Configuration
-POSTGRES_USER=panteon
-POSTGRES_PASSWORD=panteon
+POSTGRES_USER= panteon
+POSTGRES_PASSWORD= panteon   
 ```
 
 ## Docker Setup
