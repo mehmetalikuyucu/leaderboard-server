@@ -38,6 +38,26 @@ POSTGRES_PASSWORD=panteon
 ```yaml
 version: '3.7'
 services:
+  api:
+    build: .
+    container_name: api
+    ports:
+      - "3001:3001"
+    depends_on:
+      - redis
+      - postgres
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - POSTGRES_HOST=postgres
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    networks:
+      - redis
+      - postgres
+    restart: unless-stopped
+
   redis:
     image: redis
     container_name: redis
@@ -45,6 +65,8 @@ services:
       - "6379:6379"
     networks: 
       - redis
+    volumes:
+      - redis:/data/redis
     restart: unless-stopped
 
   postgres:
@@ -68,6 +90,7 @@ networks:
 
 volumes:
   postgres:
+  redis:
 ```
 
 Start Docker containers:
