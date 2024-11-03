@@ -24,19 +24,17 @@ export class RewardServiceService {
 
   async distributeWeeklyRewards(): Promise<void> {
     try {
-      const prizePool = await this.leaderboardService.getCalculatedPrizePool();
-      console.log('Prize Pool:', prizePool);
-
-      if (prizePool <= 0) {
-        console.log('No prize pool available for distribution');
-        return;
-      }
-
       const topPlayers = await this.leaderboardService.getTopPlayers();
       console.log('Top Players Count:', topPlayers.length);
 
       if (topPlayers.length === 0) {
         console.log('No players found for reward distribution');
+        return;
+      }
+      const prizePool = await this.leaderboardService.getCalculatedPrizePool();
+
+      if (prizePool <= 0) {
+        console.log('No prize pool available for distribution');
         return;
       }
 
