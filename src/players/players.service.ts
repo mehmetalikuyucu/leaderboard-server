@@ -96,9 +96,7 @@ export class PlayersService {
       where: { id },
       relations: ['user'],
     });
-    console.log('Current player state:', player);
 
-  
     if (!player) {
       throw new NotFoundException(`Player with ID "${id}" not found`);
     }
@@ -111,21 +109,22 @@ export class PlayersService {
     player.money = updatedMoney;
     await this.leaderboardService.updateOrCreateLeaderboardEntry(
       player,
-      updatedMoney,
+      amount,
       weekNumber,
-      year
+      year,
     );
     const savedPlayer = await this.playerRepository.save(player);
     return this.toResponseDto(savedPlayer);
   }
-  async updateMoneyWithoutRedis(id: string, amount: number): Promise<PlayerResponseDto> {
+  async updateMoneyWithoutRedis(
+    id: string,
+    amount: number,
+  ): Promise<PlayerResponseDto> {
     const player = await this.playerRepository.findOne({
       where: { id },
       relations: ['user'],
     });
-    console.log('Current player state:', player);
 
-  
     if (!player) {
       throw new NotFoundException(`Player with ID "${id}" not found`);
     }
