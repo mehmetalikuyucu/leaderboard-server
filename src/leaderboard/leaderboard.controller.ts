@@ -90,6 +90,7 @@ export class LeaderboardController {
   @ApiQuery({
     name: 'playerName',
     description: 'Name of the player to search for',
+    required: false,
   })
   async searchPlayerWithContext(@Query('playerName') playerName: string) {
     const results =
