@@ -18,11 +18,11 @@ export class LeaderboardService {
   ) {
     this.redis = this.redisService.getOrThrow();
   }
-   getPrizePoolKey(): string {
+  getPrizePoolKey(): string {
     return `prizepool:${moment().year()}:${moment().week()}`;
   }
 
-   getLeaderboardKey(year: number, week: number): string {
+  getLeaderboardKey(year: number, week: number): string {
     return `leaderboard:${year}:${week}`;
   }
 
@@ -67,7 +67,6 @@ export class LeaderboardService {
       //     .where('leaderboard.weekNumber = :weekNumber', { weekNumber })
       //     .andWhere('leaderboard.year = :year', { year })
       //     .getRawOne();
-
       //   return result?.total || 0;
       // } catch (dbError) {
       //   console.error('Database total money calculation failed:', dbError);
@@ -113,9 +112,17 @@ export class LeaderboardService {
     const previousPool = parseFloat(prizePool);
     const newPool = previousPool + money * 0.02;
     await this.redis.set(prizePoolKey, newPool.toString(), 'EX', 604800);
+    const existingEntry = await this.leaderboardRepository.findOne({
+      where: {
+        playerName: player.playerName,
+        weekNumber,
+        year,
+      },
+    });
+    const updatedMoney = money + (existingEntry?.money || 0);
     try {
       const pipeline = this.redis.pipeline();
-      pipeline.zadd(leaderboardKey, money, player.playerName);
+      pipeline.zadd(leaderboardKey, updatedMoney, player.playerName);
       pipeline.hset(playerDetailsKey, {
         playerName: player.playerName,
         money: money.toString(),
@@ -177,8 +184,12 @@ export class LeaderboardService {
       // );
     }
   }
-  private async populateRedisFromDatabase(year: number, weekNumber: number): Promise<void> {
-    const entries = await this.leaderboardRepository.createQueryBuilder('leaderboard')
+  private async populateRedisFromDatabase(
+    year: number,
+    weekNumber: number,
+  ): Promise<void> {
+    const entries = await this.leaderboardRepository
+      .createQueryBuilder('leaderboard')
       .leftJoinAndSelect('leaderboard.player', 'player')
       .leftJoinAndSelect('player.user', 'user')
       .where('leaderboard.weekNumber = :weekNumber', { weekNumber })
@@ -251,7 +262,7 @@ export class LeaderboardService {
     });
 
     if (existingEntry) {
-      existingEntry.money = money;
+      existingEntry.money = existingEntry.money + money;
       await this.leaderboardRepository.save(existingEntry);
     } else {
       const newEntry = this.leaderboardRepository.create({
@@ -293,191 +304,79 @@ export class LeaderboardService {
   }
 
   async getTopPlayers(): Promise<
-  Array<{ playerName: string; score: number; rank: number; details: any }>
-> {
-  const weekNumber = moment().week();
-  const year = moment().year();
-  const leaderboardKey = this.getLeaderboardKey(year, weekNumber);
+    Array<{ playerName: string; score: number; rank: number; details: any }>
+  > {
+    const weekNumber = moment().week();
+    const year = moment().year();
+    const leaderboardKey = this.getLeaderboardKey(year, weekNumber);
 
-  try {
-    const exists = await this.redis.exists(leaderboardKey);
-    
-    if (!exists) {
-      await this.populateRedisFromDatabase(year, weekNumber);
-    }
+    try {
+      const exists = await this.redis.exists(leaderboardKey);
 
-    const results = await this.redis.zrevrange(
-      leaderboardKey,
-      0,
-      99,
-      'WITHSCORES',
-    );
+      if (!exists) {
+        await this.populateRedisFromDatabase(year, weekNumber);
+      }
 
-    if (!results.length) {
-      return [];
-    }
-
-    const topPlayers = [];
-    const pipeline = this.redis.pipeline();
-
-    for (let i = 0; i < results.length; i += 2) {
-      const playerName = results[i];
-      pipeline.zrevrank(leaderboardKey, playerName);
-      pipeline.hgetall(
-        this.getPlayerDetailsKey(year, weekNumber, playerName),
+      const results = await this.redis.zrevrange(
+        leaderboardKey,
+        0,
+        99,
+        'WITHSCORES',
       );
-    }
 
-    const pipelineResults = await pipeline.exec();
+      if (!results.length) {
+        return [];
+      }
 
-    if (!pipelineResults) {
-      return [];
-    }
+      const topPlayers = [];
+      const pipeline = this.redis.pipeline();
 
-    for (let i = 0; i < results.length; i += 2) {
-      const playerName = results[i];
-      const score = parseFloat(results[i + 1]);
-      const pipelineIndex = i / 2;
+      for (let i = 0; i < results.length; i += 2) {
+        const playerName = results[i];
+        pipeline.zrevrank(leaderboardKey, playerName);
+        pipeline.hgetall(
+          this.getPlayerDetailsKey(year, weekNumber, playerName),
+        );
+      }
 
-      const rank = pipelineResults[pipelineIndex * 2][1] as number;
-      const details = pipelineResults[pipelineIndex * 2 + 1][1];
+      const pipelineResults = await pipeline.exec();
 
-      topPlayers.push({
-        playerName,
-        score,
-        rank: rank + 1,
-        details,
-      });
-    }
+      if (!pipelineResults) {
+        return [];
+      }
 
-    return topPlayers;
-  } catch (error) {
-    console.error('Redis top players lookup failed:', error);
-    const entries = await this.leaderboardRepository.find({
-      where: { year, weekNumber },
-      order: { money: 'DESC' },
-      take: 100,
-      relations: ['player', 'player.user'],
-    });
+      for (let i = 0; i < results.length; i += 2) {
+        const playerName = results[i];
+        const score = parseFloat(results[i + 1]);
+        const pipelineIndex = i / 2;
 
-    return entries.map((entry, index) => ({
-      playerName: entry.playerName,
-      score: entry.money,
-      rank: index + 1,
-      details: entry.player ? {
-        playerName: entry.playerName,
-        money: entry.money.toString(),
-        rank: entry.player.rank,
-        country: entry.player.user?.country,
-        userId: entry.player.userId,
-        username: entry.player.user?.username,
-        name: entry.player.user?.name,
-        surname: entry.player.user?.surname,
-      } : null,
-    }));
-  }
-}
+        const rank = pipelineResults[pipelineIndex * 2][1] as number;
+        const details = pipelineResults[pipelineIndex * 2 + 1][1];
 
-async getPlayerRangeWithContext(playerName: string): Promise<{
-  message: string;
-  data: Array<{
-    playerName: string;
-    score: number;
-    rank: number;
-    details: any;
-  }>;
-}> {
-  const year = moment().year();
-  const weekNumber = moment().week();
-  const leaderboardKey = this.getLeaderboardKey(year, weekNumber);
-  try {
-    const exists = await this.redis.exists(leaderboardKey);
-    
-    if (!exists) {
-      await this.populateRedisFromDatabase(year, weekNumber);
-    }
-
-    const playerRank = await this.redis.zrevrank(leaderboardKey, playerName);
-
-    if (playerRank === null) {
-      return {
-        data: await this.getTopPlayers(),
-        message: "Player not found in this week's leaderboard",
-      };
-    }
-
-    const rangeStart = Math.max(0, playerRank - 3);
-    const rangeEnd = playerRank + 2;
-
-    const results = await this.redis.zrevrange(
-      leaderboardKey,
-      rangeStart,
-      rangeEnd,
-      'WITHSCORES',
-    );
-
-    if (!results || results.length === 0) {
-      return {
-        message: 'No results found',
-        data: [],
-      };
-    }
-
-    const pipeline = this.redis.pipeline();
-    const playerNames = [];
-
-    for (let i = 0; i < results.length; i += 2) {
-      const name = results[i];
-      playerNames.push(name);
-      pipeline.hgetall(this.getPlayerDetailsKey(year, weekNumber, name));
-    }
-
-    const playerDetails = await pipeline.exec();
-
-    const players = results.reduce((acc, curr, index) => {
-      if (index % 2 === 0) {
-        const playerName = curr;
-        const score = parseFloat(results[index + 1]);
-        const details = playerDetails[Math.floor(index / 2)][1];
-        
-        acc.push({
+        topPlayers.push({
           playerName,
           score,
+          rank: rank + 1,
           details,
-          rank: rangeStart + index / 2 + 1,
         });
       }
-      return acc;
-    }, []);
 
-    return {
-      message: 'Results found',
-      data: players,
-    };
-
-  } catch (error) {
-    console.error('Redis operation failed:', error);
-    
-    try {
-      const playerEntry = await this.leaderboardRepository.findOne({
-        where: { playerName, year, weekNumber },
+      return topPlayers;
+    } catch (error) {
+      console.error('Redis top players lookup failed:', error);
+      const entries = await this.leaderboardRepository.find({
+        where: { year, weekNumber },
+        order: { money: 'DESC' },
+        take: 100,
+        relations: ['player', 'player.user'],
       });
 
-      if (!playerEntry) {
-        const topEntries = await this.leaderboardRepository.find({
-          where: { year, weekNumber },
-          order: { money: 'DESC' },
-          take: 100,
-          relations: ['player', 'player.user'],
-        });
-
-        return {
-          message: "Player not found in this week's leaderboard",
-          data: topEntries.map((entry, index) => ({
-            playerName: entry.playerName,
-            score: entry.money,
-            rank: index + 1,
-            details: entry.player ? {
+      return entries.map((entry, index) => ({
+        playerName: entry.playerName,
+        score: entry.money,
+        rank: index + 1,
+        details: entry.player
+          ? {
               playerName: entry.playerName,
               money: entry.money.toString(),
               rank: entry.player.rank,
@@ -486,57 +385,175 @@ async getPlayerRangeWithContext(playerName: string): Promise<{
               username: entry.player.user?.username,
               name: entry.player.user?.name,
               surname: entry.player.user?.surname,
-            } : null,
-          })),
+            }
+          : null,
+      }));
+    }
+  }
+
+  async getPlayerRangeWithContext(playerName: string): Promise<{
+    message: string;
+    data: Array<{
+      playerName: string;
+      score: number;
+      rank: number;
+      details: any;
+    }>;
+  }> {
+    const year = moment().year();
+    const weekNumber = moment().week();
+    const leaderboardKey = this.getLeaderboardKey(year, weekNumber);
+    try {
+      const exists = await this.redis.exists(leaderboardKey);
+      if (!exists) {
+        await this.populateRedisFromDatabase(year, weekNumber);
+      }
+
+      const playerRank = await this.redis.zrevrank(leaderboardKey, playerName);
+
+      if (playerRank === null) {
+        return {
+          data: await this.getTopPlayers(),
+          message: "Player not found in this week's leaderboard",
         };
       }
 
-      const query = this.leaderboardRepository.createQueryBuilder('leaderboard')
-        .leftJoinAndSelect('leaderboard.player', 'player')
-        .leftJoinAndSelect('player.user', 'user')
-        .where('leaderboard.year = :year', { year })
-        .andWhere('leaderboard.weekNumber = :weekNumber', { weekNumber })
-        .orderBy('leaderboard.money', 'DESC');
+      const rangeStart = Math.max(0, playerRank - 3);
+      const rangeEnd = playerRank + 2;
 
-      const [entries, total] = await query.getManyAndCount();
-      
-      const playerIndex = entries.findIndex(e => e.playerName === playerName);
-      
-      if (playerIndex === -1) {
-        throw new Error('Player not found');
+      const results = await this.redis.zrevrange(
+        leaderboardKey,
+        rangeStart,
+        rangeEnd,
+        'WITHSCORES',
+      );
+
+      if (!results || results.length === 0) {
+        return {
+          message: 'No results found',
+          data: [],
+        };
       }
 
-      const rangeStart = Math.max(0, playerIndex - 3);
-      const rangeEnd = Math.min(total - 1, playerIndex + 2);
-      
-      const rangeEntries = entries.slice(rangeStart, rangeEnd + 1);
+      const pipeline = this.redis.pipeline();
+      const playerNames = [];
+
+      for (let i = 0; i < results.length; i += 2) {
+        const name = results[i];
+        playerNames.push(name);
+        pipeline.hgetall(this.getPlayerDetailsKey(year, weekNumber, name));
+      }
+
+      const playerDetails = await pipeline.exec();
+
+      const players = results.reduce((acc, curr, index) => {
+        if (index % 2 === 0) {
+          const playerName = curr;
+          const score = parseFloat(results[index + 1]);
+          const details = playerDetails[Math.floor(index / 2)][1];
+
+          acc.push({
+            playerName,
+            score,
+            details,
+            rank: rangeStart + index / 2 + 1,
+          });
+        }
+        return acc;
+      }, []);
 
       return {
         message: 'Results found',
-        data: rangeEntries.map((entry, index) => ({
-          playerName: entry.playerName,
-          score: entry.money,
-          rank: rangeStart + index + 1,
-          details: entry.player ? {
-            playerName: entry.playerName,
-            money: entry.money.toString(),
-            rank: entry.player.rank,
-            country: entry.player.user?.country,
-            userId: entry.player.userId,
-            username: entry.player.user?.username,
-            name: entry.player.user?.name,
-            surname: entry.player.user?.surname,
-          } : null,
-        })),
+        data: players,
       };
+    } catch (error) {
+      console.error('Redis operation failed:', error);
 
-    } catch (dbError) {
-      console.error('Database operation failed:', dbError);
-      return {
-        message: 'An error occurred',
-        data: [],
-      };
+      try {
+        const playerEntry = await this.leaderboardRepository.findOne({
+          where: { playerName, year, weekNumber },
+        });
+
+        if (!playerEntry) {
+          const topEntries = await this.leaderboardRepository.find({
+            where: { year, weekNumber },
+            order: { money: 'DESC' },
+            take: 100,
+            relations: ['player', 'player.user'],
+          });
+
+          return {
+            message: "Player not found in this week's leaderboard",
+            data: topEntries.map((entry, index) => ({
+              playerName: entry.playerName,
+              score: entry.money,
+              rank: index + 1,
+              details: entry.player
+                ? {
+                    playerName: entry.playerName,
+                    money: entry.money.toString(),
+                    rank: entry.player.rank,
+                    country: entry.player.user?.country,
+                    userId: entry.player.userId,
+                    username: entry.player.user?.username,
+                    name: entry.player.user?.name,
+                    surname: entry.player.user?.surname,
+                  }
+                : null,
+            })),
+          };
+        }
+
+        const query = this.leaderboardRepository
+          .createQueryBuilder('leaderboard')
+          .leftJoinAndSelect('leaderboard.player', 'player')
+          .leftJoinAndSelect('player.user', 'user')
+          .where('leaderboard.year = :year', { year })
+          .andWhere('leaderboard.weekNumber = :weekNumber', { weekNumber })
+          .orderBy('leaderboard.money', 'DESC');
+
+        const [entries, total] = await query.getManyAndCount();
+
+        const playerIndex = entries.findIndex(
+          (e) => e.playerName === playerName,
+        );
+
+        if (playerIndex === -1) {
+          throw new Error('Player not found');
+        }
+
+        const rangeStart = Math.max(0, playerIndex - 3);
+        const rangeEnd = Math.min(total - 1, playerIndex + 2);
+
+        const rangeEntries = entries.slice(rangeStart, rangeEnd + 1);
+
+        return {
+          message: 'Results found',
+          data: rangeEntries.map((entry, index) => ({
+            playerName: entry.playerName,
+            score: entry.money,
+            rank: rangeStart + index + 1,
+            details: entry.player
+              ? {
+                  playerName: entry.playerName,
+                  money: entry.money.toString(),
+                  rank: entry.player.rank,
+                  country: entry.player.user?.country,
+                  userId: entry.player.userId,
+                  username: entry.player.user?.username,
+                  name: entry.player.user?.name,
+                  surname: entry.player.user?.surname,
+                }
+              : null,
+          })),
+        };
+      } catch (dbError) {
+        console.error('Database operation failed:', dbError);
+        return {
+          message: 'An error occurred',
+          data: [],
+        };
+      }
     }
   }
-}
 }
