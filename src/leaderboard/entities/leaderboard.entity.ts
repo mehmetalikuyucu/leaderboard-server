@@ -41,6 +41,14 @@ export class Leaderboard {
     precision: 20,
     scale: 2,
     default: 0,
+    transformer: {
+      to(value: number): number {
+        return value;
+      },
+      from(value: string): number {
+        return parseFloat(value);
+      },
+    },
   })
   money: number;
 
@@ -61,7 +69,11 @@ export class Leaderboard {
   @Column({ type: 'integer' })
   year: number;
 
-  @ManyToOne(() => Player, { eager: true ,onDelete: 'SET NULL',nullable:true })
+  @ManyToOne(() => Player, {
+    eager: true,
+    onDelete: 'SET NULL',
+    nullable: true,
+  })
   @JoinColumn({ name: 'player_name', referencedColumnName: 'playerName' })
   player: Player;
 
